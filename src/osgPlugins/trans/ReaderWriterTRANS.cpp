@@ -55,7 +55,7 @@ static bool getFilenameAndParams(const std::string& input, std::string& filename
         return false;
     }
 
-    // clear the params sting of any brackets.
+    // clear the params string of any brackets.
     std::string::size_type params_pos = params.size();
     for(; params_pos>0; )
     {
@@ -81,7 +81,7 @@ static bool getFilenameAndParams(const std::string& input, std::string& filename
  * This pseudo-loader make it simple to change the origin of a saved model
  * by specifying a correcting translation as part of the filename.
  *
- * Usage: <modelfile.ext>.<tx>,<ty>,<tz>.globe
+ * Usage: <modelfile.ext>.<tx>,<ty>,<tz>.trans
  * where:
  *      <modelfile.ext> = an model filename.
  *      <tx> = translation along the X axis.

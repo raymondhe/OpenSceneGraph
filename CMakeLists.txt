@@ -4,7 +4,7 @@
 SET(OPENSCENEGRAPH_MAJOR_VERSION 3)
 SET(OPENSCENEGRAPH_MINOR_VERSION 7)
 SET(OPENSCENEGRAPH_PATCH_VERSION 0)
-SET(OPENSCENEGRAPH_SOVERSION 160)
+SET(OPENSCENEGRAPH_SOVERSION 202)
 
 
 # set to 0 when not a release candidate, non zero means that any generated
@@ -30,6 +30,9 @@ if(COMMAND cmake_policy)
         cmake_policy(SET CMP0017 NEW)
     endif()
 
+    # INTERPROCEDURAL_OPTIMIZATION is enforced when enabled.
+    # Allows passing -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON
+    cmake_policy(SET CMP0069 NEW)
 endif()
 
 IF(APPLE)
@@ -42,6 +45,8 @@ IF(APPLE)
     MESSAGE(STATUS "OSG_OSX_VERSION=${OSG_OSX_VERSION}")
 ENDIF()
 
+PROJECT(OpenSceneGraph)
+
 # Set OSX architecture flags here, since they must be specified before
 # creating the actual OSG project.
 # Note that the CMAKE_OSX_* variables are not well documented in
@@ -52,7 +57,7 @@ ENDIF()
 
 IF(ANDROID)
     SET(OSG_WINDOWING_SYSTEM "None" CACHE STRING "Windowing system type for graphics window creation; options: None.")
-ELSEIF(WIN32)
+ELSEIF(WIN32 OR MINGW)
     SET(OSG_WINDOWING_SYSTEM "Win32" CACHE STRING "Windowing system type for graphics window creation; options: Win32 or None.")
 ELSEIF(APPLE)
     # custom option to flag an iOS build
@@ -72,18 +77,19 @@ ELSEIF(APPLE)
         SET (IPHONE_ENABLE_BITCODE "NO" CACHE STRING "IOS Enable Bitcode")
 
         # seamless toggle between device and simulator
-        SET(CMAKE_XCODE_EFFECTIVE_PLATFORMS "-iphoneos;-iphonesimulator")
+        SET(CMAKE_XCODE_EFFECTIVE_PLATFORMS "-iphoneos;-iphonesimulator" CACHE STRING "Xcode effective platforms for iOS")
 
         # set deployment target to min version
-        SET(CMAKE_XCODE_ATTRIBUTE_IPHONEOS_DEPLOYMENT_TARGET "${IPHONE_VERSION_MIN}" CACHE STRING "Deployment target for iOS" FORCE)
+        SET(CMAKE_XCODE_ATTRIBUTE_IPHONEOS_DEPLOYMENT_TARGET "${IPHONE_VERSION_MIN}" CACHE STRING "Xcode deployment target for iOS")
 
         # Set standard architectures
-        SET(CMAKE_OSX_ARCHITECTURES "$(ARCHS_STANDARD)")
+        SET(CMAKE_OSX_ARCHITECTURES "$(ARCHS_STANDARD)" CACHE STRING "Build architectures for iOS")
 
     ELSE()
         # OSX >= 10.5 uses Cocoa windowing system, otherwise Carbon
         IF(OSG_OSX_VERSION VERSION_LESS 10.5)
             SET(OSG_WINDOWING_SYSTEM "Carbon" CACHE STRING "Windowing system type for graphics window creation; options: Carbon, Cocoa, X11 or None.")
+            SET(OSG_WINDOWING_SYSTEM_CARBON ON INTERNAL "use Carbon (apple; 32 bit only)")
         ELSE()
             SET(OSG_WINDOWING_SYSTEM "Cocoa" CACHE STRING "Windowing system type for graphics window creation; options: Carbon, Cocoa, X11 or None.")
         ENDIF()
@@ -120,7 +126,9 @@ ELSE()
     SET(OSG_WINDOWING_SYSTEM "X11" CACHE STRING "Windowing system type for graphics window creation; options: X11 or None.")
 ENDIF()
 
-PROJECT(OpenSceneGraph)
+IF(OSG_WINDOWING_SYSTEM STREQUAL "None")
+    SET(OSG_WINDOWING_SYSTEM_NONE ON INTERNAL "No windowing system")
+ENDIF()
 
 SET(OPENSCENEGRAPH_VERSION ${OPENSCENEGRAPH_MAJOR_VERSION}.${OPENSCENEGRAPH_MINOR_VERSION}.${OPENSCENEGRAPH_PATCH_VERSION})
 
@@ -275,8 +283,25 @@ IF(APPLE)
     SET(OSG_COMPILE_FRAMEWORKS_INSTALL_NAME_DIR "@executable_path/../Frameworks" CACHE STRING "install name dir for compiled frameworks")
 ELSE()
     # Non-Apple: Find OpenGL
-    FIND_PACKAGE(OpenGL)
-    FIND_PACKAGE(EGL)
+    
+    # Support EGL on Windows
+    IF(OSG_WINDOWING_SYSTEM STREQUAL "Win32" AND (OSG_GLES2_AVAILABLE OR OSG_GLES3_AVAILABLE ) )
+        FIND_PACKAGE(EGL)
+    
+        set(OSG_USE_EGL ON)
+
+        IF(OSG_GLES3_AVAILABLE)
+            FIND_PATH(OPENGL_INCLUDE_DIR GLES3/gl3.h)
+        ENDIF()
+        IF(OSG_GLES2_AVAILABLE)
+            FIND_PATH(OPENGL_INCLUDE_DIR GLES2/gl2.h)
+        ENDIF()
+        FIND_LIBRARY(OPENGL_gl_LIBRARY "libGLESv2.dll")
+    ELSE()
+        # Non-Apple: Find OpenGL
+        FIND_PACKAGE(OpenGL)
+    ENDIF()
+
 ENDIF()
 ENDIF()
 
@@ -356,7 +381,9 @@ IF(WIN32 AND NOT ANDROID)
         OPTION(MSVC_DISABLE_CHECKED_ITERATORS "Set to ON to disable Visual C++ checked iterators. If you do this you must ensure that every other project in your solution and all dependencies are compiled with _SECURE_SCL=0." OFF)
         MARK_AS_ADVANCED(MSVC_DISABLE_CHECKED_ITERATORS)
         IF(MSVC_DISABLE_CHECKED_ITERATORS)
+            ADD_DEFINITIONS(-D_ITERATOR_DEBUG_LEVEL=0) # this supercedes _SECURE_SCL and _HAS_ITERATOR_DEBUGGING in VS2010 and forward
             ADD_DEFINITIONS(-D_SECURE_SCL=0)
+            ADD_DEFINITIONS(-D_HAS_ITERATOR_DEBUGGING=0)
         ENDIF(MSVC_DISABLE_CHECKED_ITERATORS)
 
         OPTION(MSVC_USE_DEFAULT_STACK_SIZE "Set to ON to use the default Visual C++ stack size. CMake forces a high stack size by default, which can cause problems for applications with large number of threads." OFF)
@@ -504,6 +531,12 @@ ENDIF()
 
 
 OPTION(OSG_GL_LIBRARY_STATIC "Set to ON to statically link with OpenGL/GLES library." OFF)
+
+IF (OSG_BUILD_PLATFORM_IPHONE OR ANDROID)
+    OPTION(OSG_TEXT_USE_FONTCONFIG "Set to ON to enable attempt to use FontConfig in osgText." OFF)
+ELSE ()
+    OPTION(OSG_TEXT_USE_FONTCONFIG "Set to OFF to disable attempt to use FontConfig in osgText." ON)
+ENDIF ()
 
 # Map the OSG_GL*_AVAILABLE settings to OSG_GL_* settings
 IF (OSG_GLES2_AVAILABLE OR OSG_GLES3_AVAILABLE OR OSG_GL3_AVAILABLE)
@@ -720,7 +753,9 @@ OPTION(BUILD_OSG_PLUGINS "Build OSG Plugins - Disable for compile testing exampl
 mark_as_advanced(BUILD_OSG_PLUGINS)
 ################################################################################
 # 3rd Party Dependency Stuff
-IF(WIN32 AND NOT ANDROID)
+OPTION(OSG_FIND_3RD_PARTY_DEPS "Enable to search for Android or Windows dependencies in ./3rdparty" ON)
+
+IF(WIN32 AND NOT ANDROID AND OSG_FIND_3RD_PARTY_DEPS)
     INCLUDE(Find3rdPartyDependencies)
 ENDIF()
 
@@ -731,7 +766,7 @@ OPTION(OSG_USE_LOCAL_LUA_SOURCE "Enable to use local Lua source when building th
 # you can use the following style of command line option when invoking Cmake (here illustrating ignoring PythonLibs) :
 # cmake -DCMAKE_DISABLE_FIND_PACKAGE_PythonLibs=1 .
 #
-IF(ANDROID)
+IF(ANDROID AND OSG_FIND_3RD_PARTY_DEPS)
     ANDROID_3RD_PARTY()
 ELSE()
 # Common to all platforms except android:
@@ -744,7 +779,6 @@ ELSE()
     FIND_PACKAGE(COLLADA)
     FIND_PACKAGE(FBX)
     FIND_PACKAGE(ZLIB)
-    FIND_PACKAGE(OpenVRML)
     FIND_PACKAGE(GDAL)
     FIND_PACKAGE(GTA)
     FIND_PACKAGE(CURL)
@@ -762,7 +796,7 @@ ELSE()
     FIND_PACKAGE(DirectInput)
     FIND_PACKAGE(NVTT)
     IF (NOT WIN32)
-        FIND_PACKAGE(Asio)
+        # FIND_PACKAGE(Asio)
     ENDIF()
     FIND_PACKAGE(ZeroConf)
 
@@ -789,9 +823,7 @@ IF(BUILD_OSG_EXAMPLES AND NOT ANDROID)
 
     FIND_PACKAGE(FLTK)
     FIND_PACKAGE(FOX)
-
-    SET(wxWidgets_USE_LIBS base core gl net)
-    FIND_PACKAGE(wxWidgets)
+    FIND_PACKAGE(wxWidgets COMPONENTS base core gl net)
 
 ENDIF()
 
@@ -810,7 +842,7 @@ ENDIF()
 
 # Image readers/writers depend on 3rd party libraries except for OS X which
 # can use Quicktime.
-IF(NOT ANDROID)
+IF(NOT (ANDROID AND OSG_FIND_3RD_PARTY_DEPS))
     IF(NOT APPLE)
         FIND_PACKAGE(GIFLIB)
         FIND_PACKAGE(JPEG)
@@ -1387,4 +1419,5 @@ ADD_CUSTOM_TARGET(uninstall
   "${CMAKE_COMMAND}" -P "${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake")
 
 #
-
+include(FeatureSummary)
+feature_summary(WHAT ALL)
